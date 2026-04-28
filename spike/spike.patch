@@ -1,0 +1,426 @@
+diff --git a/riscv/cfg.cc b/riscv/cfg.cc
+index 794e9555..ac3ae07e 100644
+--- a/riscv/cfg.cc
++++ b/riscv/cfg.cc
+@@ -47,4 +47,10 @@ cfg_t::cfg_t()
+   real_time_clint  = false;
+   trigger_count    = 4;
+   cache_blocksz    = 64;
++
++  fi_enable = false; 
++  fi_debug  = false; 
++  fi_trace  = false; 
++  fi_seed   = 0; 
++  fi_specs  = std::unordered_map<uint64_t,fi_spec_t>();
+ }
+diff --git a/riscv/cfg.h b/riscv/cfg.h
+index 779634e9..cadb5d44 100644
+--- a/riscv/cfg.h
++++ b/riscv/cfg.h
+@@ -6,6 +6,9 @@
+ #include <vector>
+ #include "decode.h"
+ #include <cassert>
++
++#include "fi_spec.h"
++
+ class abstract_sim_if_t;
+ 
+ typedef enum {
+@@ -80,6 +83,12 @@ public:
+   reg_t                   cache_blocksz;
+   std::optional<abstract_sim_if_t*> external_simulator;
+ 
++  bool fi_enable;
++  bool fi_debug;
++  bool fi_trace;
++  bool fi_seed; 
++  std::unordered_map<uint64_t,fi_spec_t> fi_specs;
++
+   size_t nprocs() const { return hartids.size(); }
+   size_t max_hartid() const { return hartids.back(); }
+ };
+diff --git a/riscv/fi_impl.cc b/riscv/fi_impl.cc
+new file mode 100644
+index 00000000..d69dff39
+--- /dev/null
++++ b/riscv/fi_impl.cc
+@@ -0,0 +1,75 @@
++#include "fi_impl.h"
++
++static std::default_random_engine prg; 
++static std::independent_bits_engine<std::default_random_engine, 8 * sizeof( reg_t ), reg_t> bits;
++
++void fi_impl_init( cfg_t& cfg ) {
++  std::random_device trg;
++
++  if( cfg.fi_seed ) {
++     prg.seed( cfg.fi_seed ); 
++    bits.seed( cfg.fi_seed );
++  }
++  else {
++     prg.seed( trg() ); 
++    bits.seed( trg() );
++  }
++}
++
++#define DECODE_MACRO_USAGE_LOGGED 0
++bool fi_impl_step( processor_t* p, insn_t insn, reg_t pc, reg_t npc ) {
++  bool skip = false;
++
++  if( p->get_cfg().fi_trace ) {
++    std::cerr << "fi: trace => step = " << std::dec << p->state.fi_step << ", pc = " << std::setw( 16 ) << std::hex << pc << ", insn = " << p->get_disassembler()->disassemble( insn ) << std::endl;
++  }
++
++  auto spec = p->get_cfg().fi_specs.find( p->state.fi_step );
++
++  if( spec != p->get_cfg().fi_specs.end() ) {
++    std::bernoulli_distribution dist( spec->second.prob ); bool trigger = dist( prg );
++
++    if( p->get_cfg().fi_debug ) {
++      std::cerr << "fi: debug => matched spec=" << spec->second << " ~> trigger=" << trigger << std::endl;
++    }
++
++    if( trigger ) {
++      switch( spec->second.type ) {
++        case SKIP : {
++          skip = true;
++
++          break;
++        }
++        case  GPR : {
++          if( p->get_cfg().fi_debug ) {
++            std::cerr << "fi: debug => >GPR[" << spec->second.gpr_addr << "]=" << std::hex << READ_REG( spec->second.gpr_addr ) << std::endl;
++          }
++
++          reg_t fault = 0;
++
++          switch( spec->second.gpr_mode ) {
++            case ZERO : {
++              fault = 0;      break;
++            }
++            case RAND : {
++              fault = bits(); break;
++            }
++          }
++
++          WRITE_REG( spec->second.gpr_addr, ( READ_REG( spec->second.gpr_addr ) & ~spec->second.gpr_mask ) | ( fault & spec->second.gpr_mask ) );
++
++          if( p->get_cfg().fi_debug ) {
++            std::cerr << "fi: debug => <GPR[" << spec->second.gpr_addr << "]=" << std::hex << READ_REG( spec->second.gpr_addr ) << std::endl;
++          }
++
++          break;
++        }
++      }
++    }
++  }
++
++  p->state.fi_step = p->state.fi_step + 1;
++
++  return skip;
++}
++#undef DECODE_MACRO_USAGE_LOGGED
+diff --git a/riscv/fi_impl.h b/riscv/fi_impl.h
+new file mode 100644
+index 00000000..0bfdab52
+--- /dev/null
++++ b/riscv/fi_impl.h
+@@ -0,0 +1,22 @@
++#ifndef __FI_IMPL_H
++#define __FI_IMPL_H
++
++#include <cstdint>
++#include <cstring>
++#include <iostream>
++#include <iomanip>
++#include <random>
++#include <unordered_map>
++
++#include "insn_template.h"
++#include "insn_macros.h"
++#include "disasm.h"
++
++#include "fi_spec.h"
++#include "fi_impl.h"
++
++extern void fi_impl_init( cfg_t& cfg );
++
++extern bool fi_impl_step( processor_t* p, insn_t insn, reg_t pc, reg_t npc );
++
++#endif
+diff --git a/riscv/fi_spec.cc b/riscv/fi_spec.cc
+new file mode 100644
+index 00000000..7246644b
+--- /dev/null
++++ b/riscv/fi_spec.cc
+@@ -0,0 +1,81 @@
++#include "fi_spec.h"
++
++void fi_spec_parse( std::unordered_map<uint64_t,fi_spec_t> &specs, const char* x ) {
++  uint64_t step = 0; fi_spec_t spec; std::stringstream tokens( x ); std::string token;
++
++  memset( &spec, 0, sizeof( fi_spec_t ) );
++
++  // type-agnostic, non-optional part(s)
++
++  getline( tokens, token, ':' );
++       step = std::stoi( token, NULL, 10 );
++
++  getline( tokens, token, ':' );
++  spec.prob = std::stof( token, NULL     );
++
++  getline( tokens, token, ':' );
++
++  switch( token.at( 0 ) ) {
++    case SKIP : {
++      spec.type = SKIP; break;
++    }
++    case  GPR : {
++      spec.type =  GPR; break;
++    }
++  }
++
++  // type-specific,     optional part(s)
++
++  switch( spec.type ) {
++    case SKIP : { // <step>:<prob>:<type>
++      break;     
++    }
++    case GPR  : { // <step>:<prob>:<type>:<addr>:<mode>:<mask>
++      getline( tokens, token, ':' );
++      spec.gpr_addr = std::stoi  ( token, NULL, 10 );
++
++      getline( tokens, token, ':' );
++
++      switch( token.at( 0 ) ) {
++        case ZERO : {
++          spec.gpr_mode = ZERO; break;
++        }
++        case RAND : {
++          spec.gpr_mode = RAND; break;
++        }
++      }
++
++      getline( tokens, token, ':' );
++      spec.gpr_mask = std::stoull( token, NULL, 16 );
++
++      break;
++    }
++  }
++
++  specs[ step ] = spec;
++}
++
++std::ostream &operator<<( std::ostream &os, const fi_spec_t &spec ) {
++  switch( spec.type ) {
++    case SKIP : {
++      os << spec.prob 
++         << ":"
++         << spec.type;
++      break;
++    }
++    case  GPR : {
++      os << spec.prob 
++         << ":"
++         << spec.type
++         << ":"
++         << spec.gpr_addr
++         << ":"
++         << spec.gpr_mode
++         << ":" 
++         << spec.gpr_mask;
++      break;
++    }
++  }
++
++  return os;
++}
+diff --git a/riscv/fi_spec.h b/riscv/fi_spec.h
+new file mode 100644
+index 00000000..8dd14236
+--- /dev/null
++++ b/riscv/fi_spec.h
+@@ -0,0 +1,32 @@
++#ifndef __FI_SPEC_H
++#define __FI_SPEC_H
++
++#include <cstdint>
++#include <cstring>
++#include <iostream>
++#include <iomanip>
++#include <random>
++#include <unordered_map>
++
++typedef enum {
++  SKIP = 's', GPR = 'r'
++} fi_type_t;
++
++typedef enum {
++  ZERO = '0', RAND = '$'
++} fi_mode_t;
++
++typedef struct {
++  float         prob;
++  fi_type_t     type;
++
++  uint64_t  gpr_addr;
++  fi_mode_t gpr_mode;
++  uint64_t  gpr_mask;
++} fi_spec_t;
++
++extern void fi_spec_parse( std::unordered_map<uint64_t,fi_spec_t> &specs, const char* x );
++
++extern std::ostream &operator<<( std::ostream &os, const fi_spec_t &spec );
++
++#endif
+diff --git a/riscv/insn_template.cc b/riscv/insn_template.cc
+index 12d564b8..74eb4bf4 100644
+--- a/riscv/insn_template.cc
++++ b/riscv/insn_template.cc
+@@ -7,10 +7,13 @@
+ 
+ #define PROLOGUE \
+   reg_t npc = sext_xlen(pc + insn_length(OPCODE)); \
+-  if (!p->extension_enabled(EXT_ZCA)) assume(insn_length(OPCODE) % 4 == 0)
++  if (!p->extension_enabled(EXT_ZCA)) assume(insn_length(OPCODE) % 4 == 0); \
++  bool skip = false; if( p->get_cfg().fi_enable ) { skip = fi_impl_step( p, insn, pc, npc ); } \
++  if( !skip ) { 
+ 
+ #define EPILOGUE \
+   trace_opcode(p, OPCODE, insn); \
++  } \
+   return npc
+ 
+ reg_t fast_rv32i_NAME(processor_t* p, insn_t insn, reg_t pc)
+diff --git a/riscv/insn_template.h b/riscv/insn_template.h
+index bf9d9d74..a6ca0e74 100644
+--- a/riscv/insn_template.h
++++ b/riscv/insn_template.h
+@@ -10,3 +10,7 @@
+ #include "v_ext_macros.h"
+ #include "debug_defines.h"
+ #include <assert.h>
++#include "cfg.h"
++
++#include "fi_spec.h"
++#include "fi_impl.h"
+diff --git a/riscv/processor.h b/riscv/processor.h
+index bf234d17..8f2c86ac 100644
+--- a/riscv/processor.h
++++ b/riscv/processor.h
+@@ -197,6 +197,8 @@ struct state_t
+   csr_t_p hvictl;
+   csr_t_p vstopi;
+ 
++  uint64_t fi_step = 0;
++
+   bool serialized; // whether timer CSRs are in a well-defined state
+ 
+   // When true, execute a single instruction and then enter debug mode.  This
+@@ -419,6 +421,8 @@ public:
+ 
+   vectorUnit_t VU;
+   triggers::module_t TM;
++
++  friend bool fi_impl_step( processor_t* p, insn_t insn, reg_t pc, reg_t npc );
+ };
+ 
+ #endif
+diff --git a/riscv/riscv.mk.in b/riscv/riscv.mk.in
+index a996b889..fb671c8c 100644
+--- a/riscv/riscv.mk.in
++++ b/riscv/riscv.mk.in
+@@ -34,6 +34,8 @@ riscv_install_hdrs = \
+ 	encoding.h \
+ 	entropy_source.h \
+ 	extension.h \
++	fi_spec.h \
++	fi_impl.h \
+ 	isa_parser.h \
+ 	jtag_dtm.h \
+ 	log_file.h \
+@@ -62,6 +64,8 @@ riscv_srcs = \
+ 	mmu.cc \
+ 	extension.cc \
+ 	extensions.cc \
++	fi_spec.cc \
++	fi_impl.cc \
+ 	rocc.cc \
+ 	devices.cc \
+ 	dtb_discovery.cc \
+diff --git a/spike_main/spike.cc b/spike_main/spike.cc
+index f62d1daf..120b7448 100644
+--- a/spike_main/spike.cc
++++ b/spike_main/spike.cc
+@@ -22,6 +22,9 @@
+ #include <sstream>
+ #include "../VERSION"
+ 
++#include "fi_spec.h"
++#include "fi_impl.h"
++
+ static void help(int exit_code = 1)
+ {
+   fprintf(stderr, "Spike RISC-V ISA Simulator " SPIKE_VERSION "\n\n");
+@@ -88,6 +91,12 @@ static void help(int exit_code = 1)
+   fprintf(stderr, "  --blocksz=<size>      Cache block size (B) for CMO operations(powers of 2) [default 64]\n");
+   fprintf(stderr, "  --instructions=<n>    Stop after n instructions\n");
+ 
++  fprintf(stderr, "  --fi-enable           Enable FI mechanism\n" );
++  fprintf(stderr, "  --fi-debug            Enable debug output from FI mechanism\n");
++  fprintf(stderr, "  --fi-trace            Enable trace output from FI mechanism\n");
++  fprintf(stderr, "  --fi-seed             Specify a seed for PRG used by FI mechanism\n" );
++  fprintf(stderr, "  --fi-spec=<spec>      Specify a fault for FI mechanism to inject\n");
++
+   exit(exit_code);
+ }
+ 
+@@ -465,6 +474,22 @@ int main(int argc, char** argv)
+     instructions = strtoull(s, 0, 0);
+   });
+ 
++  parser.option(0, "fi-enable", 0, [&](const char UNUSED* s){
++    cfg.fi_enable = true;
++  });
++  parser.option(0, "fi-debug",  0, [&](const char UNUSED* s){
++    cfg.fi_debug  = true;
++  });
++  parser.option(0, "fi-trace",  0, [&](const char UNUSED* s){
++    cfg.fi_trace  = true;
++  });
++  parser.option(0, "fi-seed",   1, [&](const char UNUSED* s){
++    cfg.fi_seed   = std::stoi( s );
++  });
++  parser.option(0, "fi-spec",   1, [&](const char       * s){
++    fi_spec_parse( cfg.fi_specs, s );
++  });
++
+   auto argv1 = parser.parse(argv);
+   std::vector<std::string> htif_args(argv1, (const char*const*)argv + argc);
+ 
+@@ -529,7 +554,6 @@ int main(int argc, char** argv)
+    if (dtb_enabled==false) {    std::cerr << "--dtb-discovery option is not compatible with --disable-dtb"<<std::endl;  exit(1);}
+   }
+ 
+-
+   sim_t s(&cfg, halted,
+       mems, plugin_device_factories, dtb_discovery, htif_args, dm_config, log_path, dtb_enabled, dtb_file,
+       socket,
+@@ -543,6 +567,16 @@ int main(int argc, char** argv)
+     s.set_remote_bitbang(&(*remote_bitbang));
+   }
+ 
++  if( cfg.fi_enable ) {
++    fi_impl_init( cfg );
++
++    if( cfg.fi_debug ) {
++      for( auto it = cfg.fi_specs.begin(); it != cfg.fi_specs.end(); it++ ) {
++        std::cerr << "fi: debug => parsed step=" << it->first << ", " << "spec=" << it->second << std::endl;
++      }
++    }
++  }
++
+   if (dump_dts) {
+     printf("%s", s.get_dts());
+     return 0;
