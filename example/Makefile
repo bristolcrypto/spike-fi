@@ -5,9 +5,9 @@ export GCC_PATHS  +=
 export GCC_LIBS   += 
 
 ${REPO_HOME}/build/test.o    : test.c test.h
-	@${GCC_PREFIX}gcc ${GCC_FLAGS} ${GCC_PATHS} $(addprefix -I ,${INCLUDES}) ${CONF} -Wall -std='gnu99' -O3 -c -o ${@} $(filter-out %.h, ${^}) ${GCC_LIBS}
+	@${GCC_PREFIX}gcc ${GCC_FLAGS} ${GCC_PATHS} $(addprefix -I ,${INCLUDES}) -Wall -std='gnu99' -O3 -c -o ${@} $(filter-out %.h, ${^}) ${GCC_LIBS}
 ${REPO_HOME}/build/test.elf  : ${REPO_HOME}/build/test.o
-	@${GCC_PREFIX}gcc ${GCC_FLAGS} ${GCC_PATHS} $(addprefix -I ,${INCLUDES}) ${CONF} -Wall -std='gnu99' -O3    -o ${@}                   ${^}  ${GCC_LIBS}
+	@${GCC_PREFIX}gcc ${GCC_FLAGS} ${GCC_PATHS} $(addprefix -I ,${INCLUDES}) -Wall -std='gnu99' -O3    -o ${@}                   ${^}  ${GCC_LIBS}
 
 ${REPO_HOME}/build/test.bin  : ${REPO_HOME}/build/test.elf
 	@${GCC_PREFIX}objcopy --output-target='binary' ${<}   ${@}
@@ -16,16 +16,16 @@ ${REPO_HOME}/build/test.asm  : ${REPO_HOME}/build/test.elf
 ${REPO_HOME}/build/test.size : ${REPO_HOME}/build/test.elf
 	@${GCC_PREFIX}size -G -d                       ${<} > ${@}
 
-build : ${REPO_HOME}/build/test.elf
+build : ${REPO_HOME}/build/test.elf ${REPO_HOME}/build/test.asm
 
 run   : ${REPO_HOME}/build/test.elf
-	@${RISCV}/bin/spike    --isa='rv32imafdc_zicsr_zifencei_zicntr' ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike    --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
 
 debug : ${REPO_HOME}/build/test.elf
-	@${RISCV}/bin/spike -d --isa='rv32imafdc_zicsr_zifencei_zicntr' ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike -d --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
 
 trace : ${REPO_HOME}/build/test.elf
-	@${RISCV}/bin/spike -l --isa='rv32imafdc_zicsr_zifencei_zicntr' ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike -l --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
 
 clean :
 	@rm --force ${REPO_HOME}/build/test.o

@@ -2,6 +2,8 @@
 
 <!--- ==================================================================== --->
 
+# Configure
+
 1. Clone the repo.
 
    ```sh
@@ -45,16 +47,109 @@
 
 <!--- ==================================================================== --->
 
-${RISCV}/bin/spike --isa='rv32imafdc_zicsr_zifencei_zicntr' --fi-enable --fi-trace --fi-debug --fi-spec='10:1.0:r:5:$:FFFFFFFF' --fi-seed=0 ${RISCV}/riscv32-unknown-elf/bin/pk ${REPO_HOME}/build/test.elf 2>&1 | more
+# Implementation
 
-- spike.cc
-  - add --fi-enable and --fi-spec arguments
+- The implementation is captured in only a few changes:
 
-- fi.{h,cc}
-  - structure to represent FI specification
-  - support for parsing FI specification
+  - `${SPIKE}/spike_main/spike.cc`
+    manages some additional command line arguments:
+  
+    - `--fi-enable`
+    - `--fi-debug`
+    - `--fi-trace`
+    - `--fi-seed=<seed:int>`
+    - `--fi-spec=<spec:string>`
 
-- insn_template.cc
-  - update PROLOGUE and EPILOGUE macros to insert opportunity for influence of FI
+  - `${SPIKE}/riscv/riscv.mk.in`
+    adds additional files to the build system.
+  - `${SPIKE}/riscv/cfg.{h,cc}`
+    defines some additional (global) state for configuration.
+  - `${SPIKE}/riscv/processor.h`
+    defines some additional  (local) state, i.e., the step counter.
+  - `${SPIKE}/riscv/insn_template.{h,cc}`
+    is altered (using the `PROLOGUE` and `EPILOGUE` macros) to insert a hook into the fault injection mechanism (if enabled) *before* execution of the semantics of a given instruction.
+  - `${SPIKE}/riscv/fi_spec.{h,cc}`
+    implements support for fault injection specifications.
+  - `${SPIKE}/riscv/fi_impl.{h,cc}`
+    implements support for fault injection        actions, i.e., the mechanism itself.
+
+- The following types of fault specification are supported:
+
+  1. Instruction skip:
+     `<spec>` is `<step>:<prob>:<type>`
+     where
+     
+     - `<step>` is an integer step value
+     - `<prob>` is a floating point injection probability (so between 0.0 and 1.0)
+     - `<type>` is `s`
+
+     For example
+
+  2. Register update:
+     `<spec>` is `<step>:<prob>:<type>:<addr>:<mode>:<mask>`
+     where
+
+     - `<step>` is an integer step value
+     - `<prob>` is a floating point injection probability (so between 0.0 and 1.0)
+     - `<type>` is `r`
+     - `<addr>` is an integer register address (so between 0 and 31)
+     - `<mode>` is `0`, `1`, or `?` to updated to zero, one, or random respectively
+     - `<mask>` is a hexadecimal mask, which controls the bits updated (if the i-th mask bit equal to 1, the i-th register bit is updated)
+
+<!--- ==================================================================== --->
+
+# Example
+
+1. Build  
+   example program:
+
+   ```sh
+   make --directory="${REPO_HOME}/example" build
+   ```
+
+2. Execute
+   example program as is:
+
+   ```sh
+   make --directory="${REPO_HOME}/example" run
+   ```
+
+3. Execute
+   example program, but make use of fault induction support:
+
+   - enable fault induction, enable fault induction debugging,
+     *and*
+     enable fault induction trace to, e.g., show the step values and identify a target instruction:
+
+     ```sh
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace"
+     ```
+
+   - enable fault induction, enable fault induction debugging,
+     *and*
+     specify a "skip instruction" fault at step 215907
+     (meaning the loop terminates after 1 iteration):
+
+     ```sh
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215907:1.0:s'"
+     ```
+
+   - enable fault induction, enable fault induction debugging,
+     *and*
+     specify a "set register to zero" fault at step 215903
+     (meaning the 1st loop iteration adds 0 rather than 9):
+
+     ```sh
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215903:1.0:r:14:0:FFFFFFFF'"
+     ```
+
+   - enable fault induction, enable fault induction debugging,
+     *and*
+     specify a "set register to random" fault at step 215903
+     (meaning the 1st loop iteration adds something random rather than 9):
+
+     ```sh
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
+     ```
 
 <!--- ==================================================================== --->

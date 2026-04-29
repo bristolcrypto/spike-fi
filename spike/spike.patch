@@ -1,5 +1,5 @@
 diff --git a/riscv/cfg.cc b/riscv/cfg.cc
-index 794e9555..ac3ae07e 100644
+index 794e9555..373dfc9b 100644
 --- a/riscv/cfg.cc
 +++ b/riscv/cfg.cc
 @@ -47,4 +47,10 @@ cfg_t::cfg_t()
@@ -7,14 +7,14 @@ index 794e9555..ac3ae07e 100644
    trigger_count    = 4;
    cache_blocksz    = 64;
 +
-+  fi_enable = false; 
-+  fi_debug  = false; 
-+  fi_trace  = false; 
-+  fi_seed   = 0; 
++  fi_enable = false;
++  fi_debug  = false;
++  fi_trace  = false;
++  fi_seed   = 0;
 +  fi_specs  = std::unordered_map<uint64_t,fi_spec_t>();
  }
 diff --git a/riscv/cfg.h b/riscv/cfg.h
-index 779634e9..cadb5d44 100644
+index 779634e9..5ee6a01b 100644
 --- a/riscv/cfg.h
 +++ b/riscv/cfg.h
 @@ -6,6 +6,9 @@
@@ -34,7 +34,7 @@ index 779634e9..cadb5d44 100644
 +  bool fi_enable;
 +  bool fi_debug;
 +  bool fi_trace;
-+  bool fi_seed; 
++  bool fi_seed;
 +  std::unordered_map<uint64_t,fi_spec_t> fi_specs;
 +
    size_t nprocs() const { return hartids.size(); }
@@ -42,24 +42,24 @@ index 779634e9..cadb5d44 100644
  };
 diff --git a/riscv/fi_impl.cc b/riscv/fi_impl.cc
 new file mode 100644
-index 00000000..d69dff39
+index 00000000..b654f988
 --- /dev/null
 +++ b/riscv/fi_impl.cc
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,78 @@
 +#include "fi_impl.h"
 +
-+static std::default_random_engine prg; 
++static std::default_random_engine prg;
 +static std::independent_bits_engine<std::default_random_engine, 8 * sizeof( reg_t ), reg_t> bits;
 +
 +void fi_impl_init( cfg_t& cfg ) {
 +  std::random_device trg;
 +
 +  if( cfg.fi_seed ) {
-+     prg.seed( cfg.fi_seed ); 
++     prg.seed( cfg.fi_seed );
 +    bits.seed( cfg.fi_seed );
 +  }
 +  else {
-+     prg.seed( trg() ); 
++     prg.seed( trg() );
 +    bits.seed( trg() );
 +  }
 +}
@@ -97,7 +97,10 @@ index 00000000..d69dff39
 +
 +          switch( spec->second.gpr_mode ) {
 +            case ZERO : {
-+              fault = 0;      break;
++              fault =  0;     break;
++            }
++            case  ONE : {
++              fault = -1;     break;
 +            }
 +            case RAND : {
 +              fault = bits(); break;
@@ -151,10 +154,10 @@ index 00000000..0bfdab52
 +#endif
 diff --git a/riscv/fi_spec.cc b/riscv/fi_spec.cc
 new file mode 100644
-index 00000000..7246644b
+index 00000000..f17e2bab
 --- /dev/null
 +++ b/riscv/fi_spec.cc
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,84 @@
 +#include "fi_spec.h"
 +
 +void fi_spec_parse( std::unordered_map<uint64_t,fi_spec_t> &specs, const char* x ) {
@@ -185,7 +188,7 @@ index 00000000..7246644b
 +
 +  switch( spec.type ) {
 +    case SKIP : { // <step>:<prob>:<type>
-+      break;     
++      break;
 +    }
 +    case GPR  : { // <step>:<prob>:<type>:<addr>:<mode>:<mask>
 +      getline( tokens, token, ':' );
@@ -196,6 +199,9 @@ index 00000000..7246644b
 +      switch( token.at( 0 ) ) {
 +        case ZERO : {
 +          spec.gpr_mode = ZERO; break;
++        }
++        case  ONE : {
++          spec.gpr_mode =  ONE; break;
 +        }
 +        case RAND : {
 +          spec.gpr_mode = RAND; break;
@@ -215,20 +221,20 @@ index 00000000..7246644b
 +std::ostream &operator<<( std::ostream &os, const fi_spec_t &spec ) {
 +  switch( spec.type ) {
 +    case SKIP : {
-+      os << spec.prob 
++      os << spec.prob
 +         << ":"
 +         << spec.type;
 +      break;
 +    }
 +    case  GPR : {
-+      os << spec.prob 
++      os << spec.prob
 +         << ":"
 +         << spec.type
 +         << ":"
 +         << spec.gpr_addr
 +         << ":"
 +         << spec.gpr_mode
-+         << ":" 
++         << ":"
 +         << spec.gpr_mask;
 +      break;
 +    }
@@ -238,7 +244,7 @@ index 00000000..7246644b
 +}
 diff --git a/riscv/fi_spec.h b/riscv/fi_spec.h
 new file mode 100644
-index 00000000..8dd14236
+index 00000000..11a83cb7
 --- /dev/null
 +++ b/riscv/fi_spec.h
 @@ -0,0 +1,32 @@
@@ -257,7 +263,7 @@ index 00000000..8dd14236
 +} fi_type_t;
 +
 +typedef enum {
-+  ZERO = '0', RAND = '$'
++  ZERO = '0', ONE = '1', RAND = '?'
 +} fi_mode_t;
 +
 +typedef struct {
@@ -275,7 +281,7 @@ index 00000000..8dd14236
 +
 +#endif
 diff --git a/riscv/insn_template.cc b/riscv/insn_template.cc
-index 12d564b8..74eb4bf4 100644
+index 12d564b8..e70a76ce 100644
 --- a/riscv/insn_template.cc
 +++ b/riscv/insn_template.cc
 @@ -7,10 +7,13 @@
@@ -285,7 +291,7 @@ index 12d564b8..74eb4bf4 100644
 -  if (!p->extension_enabled(EXT_ZCA)) assume(insn_length(OPCODE) % 4 == 0)
 +  if (!p->extension_enabled(EXT_ZCA)) assume(insn_length(OPCODE) % 4 == 0); \
 +  bool skip = false; if( p->get_cfg().fi_enable ) { skip = fi_impl_step( p, insn, pc, npc ); } \
-+  if( !skip ) { 
++  if( !skip ) {
  
  #define EPILOGUE \
    trace_opcode(p, OPCODE, insn); \
@@ -350,7 +356,7 @@ index a996b889..fb671c8c 100644
  	devices.cc \
  	dtb_discovery.cc \
 diff --git a/spike_main/spike.cc b/spike_main/spike.cc
-index f62d1daf..120b7448 100644
+index f62d1daf..339fd60a 100644
 --- a/spike_main/spike.cc
 +++ b/spike_main/spike.cc
 @@ -22,6 +22,9 @@
@@ -367,11 +373,11 @@ index f62d1daf..120b7448 100644
    fprintf(stderr, "  --blocksz=<size>      Cache block size (B) for CMO operations(powers of 2) [default 64]\n");
    fprintf(stderr, "  --instructions=<n>    Stop after n instructions\n");
  
-+  fprintf(stderr, "  --fi-enable           Enable FI mechanism\n" );
-+  fprintf(stderr, "  --fi-debug            Enable debug output from FI mechanism\n");
-+  fprintf(stderr, "  --fi-trace            Enable trace output from FI mechanism\n");
-+  fprintf(stderr, "  --fi-seed             Specify a seed for PRG used by FI mechanism\n" );
-+  fprintf(stderr, "  --fi-spec=<spec>      Specify a fault for FI mechanism to inject\n");
++  fprintf(stderr, "  --fi-enable             Enable FI mechanism\n" );
++  fprintf(stderr, "  --fi-debug              Enable debug output from FI mechanism\n");
++  fprintf(stderr, "  --fi-trace              Enable trace output from FI mechanism\n");
++  fprintf(stderr, "  --fi-seed=<seed:int>    Specify a seed for (pseudo-)randomness generation as used by FI mechanism\n" );
++  fprintf(stderr, "  --fi-spec=<spec:string> Specify a fault for FI mechanism to inject\n");
 +
    exit(exit_code);
  }
