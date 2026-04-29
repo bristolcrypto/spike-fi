@@ -45,6 +45,20 @@
    make --directory="${REPO_HOME}/spike" build
    ```
 
+  noting that currently the implementation is
+  [patch](https://savannah.gnu.org/projects/patch)-based,
+  making changes to it is somewhat tricky.  
+  The idea, for each component,
+  (i.e., `pk` and `spike`)
+  referred to as `${COMPONENT}` is as follows:
+
+  - perform a fresh clone of the component repository,
+  - apply the existing patch to the cloned component repository,
+  - implement the change in the cloned component repository,
+  - stage the change via `git add`, but do *not* commit it, in the cloned component repository,
+  - execute `${COMPONENT}-update.sh` to produce an updated patch,
+  - optionally commit and push the updated patch.
+
 <!--- ==================================================================== --->
 
 # Implementation
