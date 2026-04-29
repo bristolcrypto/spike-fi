@@ -1,4 +1,4 @@
-# `spike-fi`: `spike` + experimental fault injection support
+# `spike-fi`: `spike` + (experimental) fault injection
 
 <!--- ==================================================================== --->
 
