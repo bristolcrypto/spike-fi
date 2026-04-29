@@ -145,7 +145,7 @@
      (meaning the loop terminates after 1 iteration):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215907:1.0:s'"
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215907:1.0:s'"
      ```
 
    - enable fault induction, enable fault induction debugging,
@@ -154,7 +154,7 @@
      (meaning the 1st loop iteration adds 0 rather than 9):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215903:1.0:r:14:0:FFFFFFFF'"
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:0:FFFFFFFF'"
      ```
 
    - enable fault induction, enable fault induction debugging,
@@ -163,7 +163,7 @@
      (meaning the 1st loop iteration adds something random rather than 9):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
+     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
      ```
 
 <!--- ==================================================================== --->
