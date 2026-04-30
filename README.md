@@ -63,6 +63,12 @@
 
 # Implementation
 
+- The implementation follows a basic high-level strategy:
+
+  - The central concept is a so-called step counter, whose state forms part of the simulated core.  The idea is that execution of instructions will update the step counter, and, when the step counter matches a specified fault, that fault is triggered; the triggering is conditional, in the sense it only occurs 1) when the fault injection mechanism is enabled and, beyond that, 2) in a non-deterministic manner subject to a specified probability.  One might wonder why, e.g., the cycle counter CSR `mcycle`, is not used instead.  The way `spike` manages this, and also relates counters such as `instret`, makes it difficult (or at least seems to), with the separate step counter the simpler solution.
+  - When triggered, a function modelling the fault action is invoked.  This is possible by inserting a hook into the mechanism for simulation of instruction semantics; the modular approach used by `spike`, where the semantics of each instruction is modelled by a header file included into a wrapper, makes this easier in the sense the insertion is quite localised.  Note that currently the action is invoked *before* the instruction semantics, although there may be use-cases or fault models where invoking it afterwards is either attractive or necessary.
+  - The fault action essentially has access to the entire state of the core, trivially allowing injection of faults into, e.g., general-purpose registers.  Faults which impact the program counter and so control-flow are more difficult, in the sense they require more careful consideration of the hook insertion; currently only instruction skip is supported, which essentially means conditional execution of the instruction semantics under control of the fault action.
+
 - The implementation is captured in only a few changes:
 
   - `${SPIKE}/spike_main/spike.cc`
