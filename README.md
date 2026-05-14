@@ -124,14 +124,14 @@
    example program:
 
    ```sh
-   make --directory="${REPO_HOME}/example" build
+   make --directory="${REPO_HOME}/examples/sum" build
    ```
 
 2. Execute
    example program as is:
 
    ```sh
-   make --directory="${REPO_HOME}/example" run
+   make --directory="${REPO_HOME}/examples/sum" run
    ```
 
 3. Execute
@@ -142,7 +142,7 @@
      enable fault induction trace to, e.g., show the step values and identify a target instruction:
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-trace"
+     make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-trace"
      ```
 
    - enable fault induction, enable fault induction debugging,
@@ -151,7 +151,7 @@
      (meaning the loop terminates after 1 iteration):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215907:1.0:s'"
+     make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-spec='215907:1.0:s'"
      ```
 
    - enable fault induction, enable fault induction debugging,
@@ -160,7 +160,7 @@
      (meaning the 1st loop iteration adds 0 rather than 9):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:0:FFFFFFFF'"
+     make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:0:FFFFFFFF'"
      ```
 
    - enable fault induction, enable fault induction debugging,
@@ -169,7 +169,7 @@
      (meaning the 1st loop iteration adds something random rather than 9):
 
      ```sh
-     make --directory="${REPO_HOME}/example" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
+     make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
      ```
 
 <!--- ==================================================================== --->
