@@ -6,5 +6,6 @@
 #include <stdint.h>
 
 #include "fi.h"
+#include "sha256.h"
 
 #endif
