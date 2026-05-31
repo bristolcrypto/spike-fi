@@ -1,7 +1,7 @@
 export GCC_PREFIX  = ${RISCV}/bin/riscv64-unknown-elf-
 
 export GCC_FLAGS  += -march='rv32imafdc_zicsr_zifencei_zicntr' -mabi='ilp32' -DXLEN='32'
-export GCC_PATHS  += 
+export GCC_PATHS  += -I ${REPO_HOME}
 export GCC_LIBS   += 
 
 ${REPO_HOME}/build/test.o    : test.c test.h

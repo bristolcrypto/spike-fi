@@ -45,7 +45,7 @@ new file mode 100644
 index 00000000..b654f988
 --- /dev/null
 +++ b/riscv/fi_impl.cc
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,82 @@
 +#include "fi_impl.h"
 +
 +static std::default_random_engine prg;
@@ -70,6 +70,10 @@ index 00000000..b654f988
 +
 +  if( p->get_cfg().fi_trace ) {
 +    std::cerr << "fi: trace => step = " << std::dec << p->state.fi_step << ", pc = " << std::setw( 16 ) << std::hex << pc << ", insn = " << p->get_disassembler()->disassemble( insn ) << std::endl;
++  }
++
++  if( ( insn.bits() & 0x000FFFFF ) == 0x00002013 ) {
++    std::cerr << "fi: mark => step = " << std::dec << p->state.fi_step << ", pc = " << std::setw( 16 ) << std::hex << pc << ", id = " << std::dec << insn.i_imm() << std::endl;
 +  }
 +
 +  auto spec = p->get_cfg().fi_specs.find( p->state.fi_step );
