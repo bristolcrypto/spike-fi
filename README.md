@@ -12,7 +12,7 @@ attack.
 The idea is that an attacker somehow actively influence execution of a 
 target device, e.g., via mechanisms which include
 clock glitches, over- or under-supply of power, electro-magnetic pulses, etc.,
-in such a way that a "useful" fault is caused.  
+in such a way that a "useful" fault is caused.
 That is, the target device behaves in some way that is advantageous to 
 the attacker; this behaviour is used to support an associated attack,
 including goals such as recovery of cryptographic key material.
@@ -29,7 +29,7 @@ the experimental aspect.
 [Adhikary et al.](https://eprint.iacr.org/2024/1944.pdf)
 survey and classify related tools, among which are type-S4 instances:
 these simulate execution of
-"**a binary file [...] compiled for a specific target**".
+"*a binary file [...] compiled for a specific target*".
 Various simulators of this type exist, for various 
 [ISAs](https://en.wikipedia.org/wiki/Instruction_set_architecture).
 
