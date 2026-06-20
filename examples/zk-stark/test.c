@@ -4,7 +4,7 @@
 #define EXTENDED_LEN (TRANSCRIPT_SIZE * 2)
 #define NUM_QUERIES (TRANSCRIPT_SIZE < 64 ? TRANSCRIPT_SIZE : 64)
 const uint64_t FIELD_MODULUS = (1ULL << 61) - 1;
-volatile uint64_t TRANSCRIPT[TRANSCRIPT_SIZE] = {1, 1, 2, 3, 5, 8, 13, 21};
+volatile uint64_t TRANSCRIPT[TRANSCRIPT_SIZE];
 
 uint64_t modmul(uint64_t a, uint64_t b, uint64_t mod);
 
@@ -92,6 +92,12 @@ uint8_t* get_merkle_root(uint8_t* tree) {
 }
 
 int main( int argc, char* argv[] ) {
+	// Generate Fibonacci sequence transcript
+	TRANSCRIPT[0] = 1;
+	TRANSCRIPT[1] = 1;
+	for (size_t i = 2; i < TRANSCRIPT_SIZE; i++)
+		TRANSCRIPT[i] = TRANSCRIPT[i-1] + TRANSCRIPT[i-2];
+
 	// Polynomial interpolation
 	uint64_t root_of_unity = modpow(3, (FIELD_MODULUS - 1) / TRANSCRIPT_SIZE, FIELD_MODULUS);
 
