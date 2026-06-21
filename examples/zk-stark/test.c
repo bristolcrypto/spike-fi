@@ -1,6 +1,8 @@
 #include "test.h"
 
+#ifndef TRANSCRIPT_SIZE
 #define TRANSCRIPT_SIZE 8
+#endif
 #define EXTENDED_LEN (TRANSCRIPT_SIZE * 2)
 #define NUM_QUERIES (TRANSCRIPT_SIZE < 64 ? TRANSCRIPT_SIZE : 64)
 const uint64_t FIELD_MODULUS = (1ULL << 61) - 1;
@@ -59,7 +61,8 @@ void fft(uint64_t* a, size_t n, uint64_t root, uint64_t mod) {
 		uint64_t wlen = modpow(root, n / len, mod);
 		for (size_t i = 0; i < n; i += len) {
 			uint64_t w = 1;
-			for (size_t j = 0; j < len / 2; j++) {
+			FI_MARK( 0 );
+			for (volatile size_t j = 0; j < len / 2; j++) {
 				uint64_t u = a[i + j];
 				uint64_t v = modmul(a[i + j + len / 2], w, mod);
 				a[i + j]           = (u + v) % mod;

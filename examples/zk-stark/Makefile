@@ -1,6 +1,9 @@
 export GCC_PREFIX  = ${RISCV}/bin/riscv64-unknown-elf-
 
 export GCC_FLAGS  += -march='rv32imafdc_zicsr_zifencei_zicntr' -mabi='ilp32' -DXLEN='32'
+ifdef TRANSCRIPT_SIZE
+export GCC_FLAGS  += -DTRANSCRIPT_SIZE=$(TRANSCRIPT_SIZE)
+endif
 export GCC_PATHS  += -I ${REPO_HOME}
 export GCC_LIBS   +=
 
