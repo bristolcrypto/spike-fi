@@ -95,17 +95,17 @@
 
 - The following types of fault specification are supported:
 
-  1. Instruction skip:
+  1. Instruction skip (step-based):
      `<spec>` is `<step>:<prob>:<type>`
      where
-     
+
      - `<step>` is an integer step value
      - `<prob>` is a floating point injection probability (so between 0.0 and 1.0)
      - `<type>` is `s`
 
      For example
 
-  2. Register update:
+  2. Register update (step-based):
      `<spec>` is `<step>:<prob>:<type>:<addr>:<mode>:<mask>`
      where
 
@@ -115,6 +115,20 @@
      - `<addr>` is an integer register address (so between 0 and 31)
      - `<mode>` is `0`, `1`, or `?` to updated to zero, one, or random respectively
      - `<mask>` is a hexadecimal mask, which controls the bits updated (if the i-th mask bit equal to 1, the i-th register bit is updated)
+
+  3. Instruction skip (PC-based):
+     `<spec>` is `pc:<addr>:<prob>:<type>`
+     where
+
+     - `<addr>` is a hexadecimal program counter value (e.g. `0x11aea`)
+     - `<prob>` is a floating point injection probability (so between 0.0 and 1.0)
+     - `<type>` is `s`
+
+     Unlike step-based specs, which trigger at a single absolute point in
+     execution, a PC-based spec triggers **every time** the given address is
+     fetched, with independent probability `<prob>` on each occurrence.  This
+     makes it suitable for injecting faults into loops or repeatedly-called
+     functions without prior knowledge of step counts.
 
 <!--- ==================================================================== --->
 
@@ -170,6 +184,26 @@
 
      ```sh
      make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-spec='215903:1.0:r:14:?:FFFFFFFF'"
+     ```
+
+   - enable fault induction, enable fault induction debugging,
+     *and*
+     specify a PC-based "skip instruction" fault at address `0x100f0`
+     (the loop back-edge in `main`) with probability 0.5 per occurrence
+     (meaning each time the loop back-edge is reached it is skipped with 50% probability,
+     so the loop terminates early on average half the time it is hit):
+
+     ```sh
+     make --directory="${REPO_HOME}/examples/sum" run FI="--fi-enable --fi-debug --fi-spec='pc:0x100f0:0.5:s'"
+     ```
+
+     To discover candidate PC values, run with `--fi-trace` and inspect the
+     output for the instruction addresses of interest, or use `objdump` on the
+     compiled ELF:
+
+     ```sh
+     make --directory="${REPO_HOME}/examples/sum" build
+     riscv64-unknown-elf-objdump -d "${REPO_HOME}/build/sum/test.elf" | grep -A2 "<target_function>"
      ```
 
 <!--- ==================================================================== --->
