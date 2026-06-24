@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+Fault injection sweep targeting the outer (len) loop back-edge of fft().
+
+Skipping the len-loop back-edge causes fft() to return after completing only
+the first stage (len=2 butterflies). All subsequent mixing stages are skipped.
+This is a more aggressive corruption than the j-loop injection: pairs of
+adjacent elements (after bit-reversal) are summed/differenced, but no
+inter-group mixing occurs.
+"""
 
 import os
 import re
@@ -19,23 +28,27 @@ def _bit_reverse(a):
             out[i], out[j] = out[j], out[i]
     return out
 
-def _fft_j0(a, root):
-    """FFT with only j=0 butterfly per group (simulates the fault)."""
-    n = len(a); a = _bit_reverse(a)
-    length = 2
-    while length <= n:
-        half = length // 2
-        for i in range(0, n, length):
-            u, v = a[i], a[i + half]          # w = 1 always (j = 0)
-            a[i]        = (u + v) % P
-            a[i + half] = (u + P - v) % P
-        length *= 2
+def _one_stage_fft(a, root):
+    """
+    FFT with only the first stage (len=2) executed.
+
+    Simulates skipping the len-loop back-edge: bit_reverse runs, then only the
+    len=2 butterfly stage executes before fft() returns. For len=2, half=1 and
+    j=0 is the only iteration, so w=1 always and the butterfly is (u+v, u-v).
+    The root argument is unused (w=1 throughout) but kept for interface parity.
+    """
+    n = len(a)
+    a = _bit_reverse(a)
+    for i in range(0, n, 2):
+        u, v = a[i], a[i + 1]
+        a[i]     = (u + v) % P
+        a[i + 1] = (u + P - v) % P
     return a
 
 def expected_leaked_set(transcript_size, transcript):
     """
-    Simulate the j=0-only broken IFFT + FFT pipeline in Python and return
-    the set of 32-bit values that appear in the faulted evals output.
+    Simulate the one-stage broken IFFT + FFT pipeline and return the set of
+    32-bit values that appear in the faulted evals output.
     On RV32 ILP32, printf("%lu") truncates uint64_t to 32 bits.
     """
     n      = transcript_size
@@ -44,12 +57,12 @@ def expected_leaked_set(transcript_size, transcript):
     inv_r  = pow(root, P - 2, P)
     inv_n  = pow(n,    P - 2, P)
 
-    # Broken IFFT: fft with inv_root then scale by 1/n
-    coeffs = _fft_j0(list(transcript), inv_r)
+    # Broken IFFT: one-stage fft with inv_root, then scale by 1/n
+    coeffs = _one_stage_fft(list(transcript), inv_r)
     coeffs = [(x * inv_n) % P for x in coeffs]
 
-    # Broken 2nd FFT on zero-padded coefficients
-    evals = _fft_j0(coeffs + [0] * n, e_root)
+    # Broken forward FFT on zero-padded coefficients
+    evals = _one_stage_fft(coeffs + [0] * n, e_root)
 
     return {x & 0xFFFFFFFF for x in evals}
 
@@ -58,10 +71,10 @@ PROBABILITIES = [round(i * 0.1, 1) for i in range(1, 11)]
 RUNS_PER_PROB = 30
 TRANSCRIPT_SIZES = [8, 16, 32, 64, 128, 256, 512, 1024]
 
-# j-loop back-edge PC (fft_start + 0x4cc).
+# len-loop back-edge PC (fft_start + 0x4f8).
 # transcript_size no longer affects the compiled binary (all arrays are now
 # heap-allocated), so fft() is always at the same address for all sizes.
-BACK_EDGE_PC = 0x11c02
+BACK_EDGE_PC = 0x11c2e
 
 def make(*args):
     return subprocess.run(
@@ -123,7 +136,6 @@ def main():
         baseline_eval_set = set(baseline_evals)
         print(f"  baseline root: {baseline_root}")
 
-        # Values that appear in evals under the j=0-only fault (32-bit truncated)
         leaked_expected = expected_leaked_set(transcript_size, transcript)
         detectable      = leaked_expected - baseline_eval_set
         print(f"  detectable leaked values: {len(detectable)}\n")

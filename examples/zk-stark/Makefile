@@ -1,9 +1,8 @@
 export GCC_PREFIX  = ${RISCV}/bin/riscv64-unknown-elf-
 
 export GCC_FLAGS  += -march='rv32imafdc_zicsr_zifencei_zicntr' -mabi='ilp32' -DXLEN='32'
-ifdef TRANSCRIPT_SIZE
-export GCC_FLAGS  += -DTRANSCRIPT_SIZE=$(TRANSCRIPT_SIZE)
-endif
+
+TRANSCRIPT_SIZE ?= 8
 export GCC_PATHS  += -I ${REPO_HOME}
 export GCC_LIBS   +=
 
@@ -27,13 +26,13 @@ ${BUILD_DIR}/test.size : ${BUILD_DIR}/test.elf
 build : ${BUILD_DIR}/test.elf ${BUILD_DIR}/test.asm
 
 run   : ${BUILD_DIR}/test.elf
-	${RISCV}/bin/spike    --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike    --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<} $(TRANSCRIPT_SIZE)
 
 debug : ${BUILD_DIR}/test.elf
-	${RISCV}/bin/spike -d --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike -d --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<} $(TRANSCRIPT_SIZE)
 
 trace : ${BUILD_DIR}/test.elf
-	${RISCV}/bin/spike -l --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<}
+	${RISCV}/bin/spike -l --isa='rv32imafdc_zicsr_zifencei_zicntr' ${FI} ${RISCV}/riscv32-unknown-elf/bin/pk ${<} $(TRANSCRIPT_SIZE)
 
 clean :
 	@rm --force --recursive ${BUILD_DIR}
