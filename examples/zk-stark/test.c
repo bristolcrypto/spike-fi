@@ -59,7 +59,7 @@ void fft(uint64_t* a, size_t n, uint64_t root, uint64_t mod) {
 			uint64_t w = 1;
 			FI_MARK( 0 );
 			for (volatile size_t j = 0; j < len / 2; j++) {
-				uint64_t u = a[i + j];
+				uint64_t u = a[i + j] % mod;
 				uint64_t v = modmul(a[i + j + len / 2], w, mod);
 				a[i + j]           = (u + v) % mod;
 				a[i + j + len / 2] = (u + mod - v) % mod;
@@ -115,7 +115,7 @@ int main( int argc, char* argv[] ) {
 
 	printf("transcript:\n");
 	for (size_t i = 0; i < n; i++)
-		printf("  [%zu] = %lu\n", i, (unsigned long)TRANSCRIPT[i]);
+		printf("  [%zu] = %llu\n", i, (unsigned long long)TRANSCRIPT[i]);
 
 	for (size_t i = 0; i < n; i++)
 		coeffs[i] = TRANSCRIPT[i];
@@ -123,7 +123,7 @@ int main( int argc, char* argv[] ) {
 
 	printf("coeffs:\n");
 	for (size_t i = 0; i < n; i++)
-		printf("  [%zu] = %lu\n", i, (unsigned long)coeffs[i]);
+		printf("  [%zu] = %llu\n", i, (unsigned long long)coeffs[i]);
 
 	// Evaluate on extended domain
 	uint64_t extended_root = modpow(3, (FIELD_MODULUS - 1) / extended_len, FIELD_MODULUS);
@@ -150,7 +150,7 @@ int main( int argc, char* argv[] ) {
 
 	printf("evals:\n");
 	for (size_t i = 0; i < extended_len; i++)
-		printf("  [%zu] = %lu\n", i, (unsigned long)evals[i]);
+		printf("  [%zu] = %llu\n", i, (unsigned long long)evals[i]);
 
 	free((void *)TRANSCRIPT);
 	free(coeffs);
