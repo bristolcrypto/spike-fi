@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Fault injection sweep targeting the inner (j) loop back-edge of fft().
+Fault injection sweep on the Gentleman-Sande (DIF) NTT.
 
-Detection: optimistically assume the faults needed to isolate the last
-input value occurred, invert the broken pipeline, and check if the
-recovered value matches the public Fibonacci constraint.
+In DIF the stages run from largest (len=n) to smallest (len=2), with
+bit-reversal at the output.  The first stage has n/2 j-iterations in a
+single group — skipping the back-edge at j=0 leaves n-2 positions
+untouched at the most mixing stage.
 
-Only log2(n)-1 specific faults are needed (one per stage at the group
-containing position n-1), giving success probability ~p^(log2(n)-1)
-— far higher than requiring the entire transform to be uniformly faulted.
+The j=0-only DIF inverse recovers raw inputs from the faulted output.
+Each position is checked against the public Fibonacci constraints.
 """
 
 import argparse
@@ -21,6 +21,11 @@ from math import log2
 P = (1 << 61) - 1
 UINT64_MAX = (1 << 64)
 
+EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# j-loop back-edge PC for DIF fft()
+BACK_EDGE_PC = 0x11bae
+
 def _bit_reverse(a):
     n = len(a); out = list(a); j = 0
     for i in range(1, n):
@@ -32,72 +37,58 @@ def _bit_reverse(a):
             out[i], out[j] = out[j], out[i]
     return out
 
-def _inv_fft_j0(a):
-    """Inverse of the j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = list(a)
+def _inv_fft_j0_dif(a):
+    """
+    Inverse of the j=0-only Gentleman-Sande (DIF) FFT.
+
+    Forward DIF j=0: stages len=n..2 with butterfly (u+v, u-v),
+    then bit-reverse output.
+
+    Inverse: undo bit-reverse, then undo stages len=2..n.
+    """
+    n = len(a)
+    a = _bit_reverse(list(a))
     inv2 = pow(2, P - 2, P)
-    length = n
-    while length >= 2:
+    length = 2
+    while length <= n:
         half = length // 2
         for i in range(0, n, length):
             s, d = a[i], a[i + half]
             a[i]        = (s + d) * inv2 % P
             a[i + half] = (s + P - d) * inv2 % P
-        length //= 2
-    return _bit_reverse(a)
+        length *= 2
+    return a
 
-def _fft_j0(a):
-    """Forward j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = _bit_reverse(list(a))
-    length = 2
-    while length <= n:
+def _fft_j0_dif(a):
+    """Forward j=0-only DIF FFT."""
+    n = len(a); a = list(a)
+    length = n
+    while length >= 2:
         half = length // 2
         for i in range(0, n, length):
             u, v = a[i], a[i + half]
             a[i]        = (u + v) % P
             a[i + half] = (u + P - v) % P
-        length *= 2
-    return a
+        length //= 2
+    return _bit_reverse(a)
 
 def _expected_faulted_evals(transcript_field, transcript_size):
-    """
-    Compute what the evaluations SHOULD look like under the j=0 fault
-    model, using only public data (Fibonacci constraints + field params).
-    """
-    n   = transcript_size
+    n     = transcript_size
     inv_n = pow(n, P - 2, P)
-
-    # Broken IFFT: j=0-only FFT with inv_root, then scale by 1/n
-    coeffs = _fft_j0(list(transcript_field))
+    coeffs = _fft_j0_dif(list(transcript_field))
     coeffs = [(x * inv_n) % P for x in coeffs]
-
-    # Broken forward FFT on zero-padded coefficients
-    return _fft_j0(coeffs + [0] * n)
+    return _fft_j0_dif(coeffs + [0] * n)
 
 def try_extract(faulted_evals, transcript_size, expected_faulted, baseline_set, num_queries):
-    """
-    Simulate a malicious verifier who opens NUM_QUERIES random positions.
-    The verifier knows the fault model and the public Fibonacci constraints,
-    so they can predict the faulted evaluation at each position.
-
-    A queried position confirms the attack if the actual faulted value
-    matches the predicted faulted value AND differs from the honest baseline.
-
-    Returns True if at least one queried position confirms extraction.
-    """
     ext = 2 * transcript_size
     nq  = min(num_queries, ext)
     queries = random.sample(range(ext), nq)
-
     for q in queries:
         if faulted_evals[q] == expected_faulted[q] and faulted_evals[q] not in baseline_set:
             return True
     return False
 
 # ── Sweep infrastructure ─────────────────────────────────────────────────────
-
-EXAMPLE_DIR  = os.path.dirname(os.path.abspath(__file__))
-BACK_EDGE_PC = 0x11c02   # j-loop back-edge PC
 
 def fibonacci(n):
     seq = [1, 1]
@@ -115,7 +106,7 @@ def make(*args):
 
 def build():
     make("clean").check_returncode()
-    make("build").check_returncode()
+    make("build", "TEST_SRC=test_dif.c").check_returncode()
 
 def parse_output(text):
     root        = re.search(r"merkle root: ([0-9a-f]+)", text)
@@ -141,18 +132,13 @@ def run_fi(prob, transcript_size):
     return root, evals, triggers, crashed
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="DIT loop-skip FI sweep")
+    ap = argparse.ArgumentParser(description="DIF loop-skip FI sweep")
     ap.add_argument("-n", "--sizes", type=int, nargs="+",
-                    default=[8, 16, 32, 64, 128, 256, 512, 1024],
-                    help="transcript sizes to test")
+                    default=[8, 16, 32, 64, 128, 256, 512, 1024])
     ap.add_argument("-p", "--probs", type=float, nargs="+",
-                    default=[round(i * 0.1, 1) for i in range(1, 11)],
-                    help="fault probabilities to test")
-    ap.add_argument("-q", "--queries", type=int, nargs="+",
-                    default=[64],
-                    help="number of queries (security parameter); swept as outer loop")
-    ap.add_argument("-r", "--runs", type=int, default=30,
-                    help="runs per (prob, queries) pair")
+                    default=[round(i * 0.1, 1) for i in range(1, 11)])
+    ap.add_argument("-q", "--queries", type=int, nargs="+", default=[64])
+    ap.add_argument("-r", "--runs", type=int, default=30)
     return ap.parse_args()
 
 def main():

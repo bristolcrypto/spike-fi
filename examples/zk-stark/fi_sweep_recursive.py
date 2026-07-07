@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Fault injection sweep targeting the inner (j) loop back-edge of fft().
+Fault injection sweep on the recursive Cooley-Tukey NTT.
 
-Detection: optimistically assume the faults needed to isolate the last
-input value occurred, invert the broken pipeline, and check if the
-recovered value matches the public Fibonacci constraint.
+The attack skips the odd recursive call in fft().  When skipped, the odd
+sub-array retains raw input values.  The combine step then mixes
+transformed-even with raw-odd using known twiddle factors.  Inversion
+recovers the raw odd-indexed inputs directly.
 
-Only log2(n)-1 specific faults are needed (one per stage at the group
-containing position n-1), giving success probability ~p^(log2(n)-1)
-— far higher than requiring the entire transform to be uniformly faulted.
+With the PC-based fault, the skip fires at EVERY recursion level: all
+odd sub-calls are skipped.  The inversion accounts for this by
+recursively extracting odd values at each level.
+
+At p=1.0 the entire transcript is recoverable.  At p<1.0 individual
+positions are checked against the public Fibonacci constraints.
 """
 
 import argparse
@@ -16,88 +20,92 @@ import os
 import re
 import random
 import subprocess
-from math import log2
 
 P = (1 << 61) - 1
 UINT64_MAX = (1 << 64)
 
-def _bit_reverse(a):
-    n = len(a); out = list(a); j = 0
-    for i in range(1, n):
-        bit = n >> 1
-        while j & bit:
-            j ^= bit; bit >>= 1
-        j ^= bit
-        if i < j:
-            out[i], out[j] = out[j], out[i]
-    return out
+EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def _inv_fft_j0(a):
-    """Inverse of the j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = list(a)
+# PC of "jal fft.part.0" for the odd recursive call (after FI_MARK).
+BACK_EDGE_PC = 0x110cc
+
+def _inv_fft_odd_skip(a, root):
+    """
+    Inverse of recursive FFT with all odd sub-calls skipped.
+
+    At each level: undo the combine step to recover even_result and
+    odd_raw, then recursively invert even_result.  odd_raw values are
+    the raw inputs at odd positions (they were never transformed).
+    """
+    n = len(a)
+    if n <= 1:
+        return list(a)
+
+    half = n // 2
     inv2 = pow(2, P - 2, P)
-    length = n
-    while length >= 2:
-        half = length // 2
-        for i in range(0, n, length):
-            s, d = a[i], a[i + half]
-            a[i]        = (s + d) * inv2 % P
-            a[i + half] = (s + P - d) * inv2 % P
-        length //= 2
-    return _bit_reverse(a)
 
-def _fft_j0(a):
-    """Forward j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = _bit_reverse(list(a))
-    length = 2
-    while length <= n:
-        half = length // 2
-        for i in range(0, n, length):
-            u, v = a[i], a[i + half]
-            a[i]        = (u + v) % P
-            a[i + half] = (u + P - v) % P
-        length *= 2
-    return a
+    # Undo combine: a[j] = even[j] + w^j*odd[j],  a[j+half] = even[j] - w^j*odd[j]
+    even_result = [0] * half
+    odd_raw     = [0] * half
+    w = 1
+    for j in range(half):
+        s = a[j]
+        d = a[j + half]
+        even_result[j] = (s + d) * inv2 % P
+        v = (s + P - d) * inv2 % P
+        odd_raw[j] = v * pow(w, P - 2, P) % P
+        w = w * root % P
+
+    # Recursively invert the even sub-result (also had odd calls skipped)
+    w2 = root * root % P
+    even_input = _inv_fft_odd_skip(even_result, w2)
+
+    # Interleave: even positions from recursion, odd positions are raw
+    result = [0] * n
+    for i in range(half):
+        result[2 * i]     = even_input[i]
+        result[2 * i + 1] = odd_raw[i]
+    return result
+
+def _fft_odd_skip(a, root):
+    """Forward recursive FFT with all odd sub-calls skipped."""
+    n = len(a)
+    if n <= 1:
+        return list(a)
+    half = n // 2
+    even = [a[2*i] for i in range(half)]
+    odd  = [a[2*i+1] for i in range(half)]
+    w2 = root * root % P
+    even_result = _fft_odd_skip(even, w2)
+    result = [0] * n
+    w = 1
+    for j in range(half):
+        t = odd[j] * w % P
+        result[j]        = (even_result[j] + t) % P
+        result[j + half] = (even_result[j] + P - t) % P
+        w = w * root % P
+    return result
 
 def _expected_faulted_evals(transcript_field, transcript_size):
-    """
-    Compute what the evaluations SHOULD look like under the j=0 fault
-    model, using only public data (Fibonacci constraints + field params).
-    """
-    n   = transcript_size
-    inv_n = pow(n, P - 2, P)
-
-    # Broken IFFT: j=0-only FFT with inv_root, then scale by 1/n
-    coeffs = _fft_j0(list(transcript_field))
+    n      = transcript_size
+    root   = pow(3, (P - 1) // n, P)
+    e_root = pow(3, (P - 1) // (2 * n), P)
+    inv_root = pow(root, P - 2, P)
+    inv_n  = pow(n, P - 2, P)
+    coeffs = _fft_odd_skip(list(transcript_field), inv_root)
     coeffs = [(x * inv_n) % P for x in coeffs]
-
-    # Broken forward FFT on zero-padded coefficients
-    return _fft_j0(coeffs + [0] * n)
+    return _fft_odd_skip(coeffs + [0] * n, e_root)
 
 def try_extract(faulted_evals, transcript_size, expected_faulted, baseline_set, num_queries):
-    """
-    Simulate a malicious verifier who opens NUM_QUERIES random positions.
-    The verifier knows the fault model and the public Fibonacci constraints,
-    so they can predict the faulted evaluation at each position.
-
-    A queried position confirms the attack if the actual faulted value
-    matches the predicted faulted value AND differs from the honest baseline.
-
-    Returns True if at least one queried position confirms extraction.
-    """
     ext = 2 * transcript_size
     nq  = min(num_queries, ext)
     queries = random.sample(range(ext), nq)
-
     for q in queries:
         if faulted_evals[q] == expected_faulted[q] and faulted_evals[q] not in baseline_set:
             return True
     return False
 
 # ── Sweep infrastructure ─────────────────────────────────────────────────────
-
-EXAMPLE_DIR  = os.path.dirname(os.path.abspath(__file__))
-BACK_EDGE_PC = 0x11c02   # j-loop back-edge PC
 
 def fibonacci(n):
     seq = [1, 1]
@@ -115,7 +123,7 @@ def make(*args):
 
 def build():
     make("clean").check_returncode()
-    make("build").check_returncode()
+    make("build", "TEST_SRC=test_recursive.c").check_returncode()
 
 def parse_output(text):
     root        = re.search(r"merkle root: ([0-9a-f]+)", text)
@@ -141,18 +149,13 @@ def run_fi(prob, transcript_size):
     return root, evals, triggers, crashed
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="DIT loop-skip FI sweep")
+    ap = argparse.ArgumentParser(description="Recursive CT loop-skip FI sweep")
     ap.add_argument("-n", "--sizes", type=int, nargs="+",
-                    default=[8, 16, 32, 64, 128, 256, 512, 1024],
-                    help="transcript sizes to test")
+                    default=[8, 16, 32, 64, 128, 256, 512, 1024])
     ap.add_argument("-p", "--probs", type=float, nargs="+",
-                    default=[round(i * 0.1, 1) for i in range(1, 11)],
-                    help="fault probabilities to test")
-    ap.add_argument("-q", "--queries", type=int, nargs="+",
-                    default=[64],
-                    help="number of queries (security parameter); swept as outer loop")
-    ap.add_argument("-r", "--runs", type=int, default=30,
-                    help="runs per (prob, queries) pair")
+                    default=[round(i * 0.1, 1) for i in range(1, 11)])
+    ap.add_argument("-q", "--queries", type=int, nargs="+", default=[64])
+    ap.add_argument("-r", "--runs", type=int, default=30)
     return ap.parse_args()
 
 def main():
