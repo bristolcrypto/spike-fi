@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Fault injection sweep targeting the inner (j) loop back-edge of fft().
+Fault injection sweep targeting the DIT inner (j) loop entry test in fft().
 
-Detection: optimistically assume the faults needed to isolate the last
-input value occurred, invert the broken pipeline, and check if the
-recovered value matches the public Fibonacci constraint.
+The old return-edge skip could not suppress the first DIT butterfly: for
+len=2 the j loop executes once, so the return edge is reached only after
+the damage is done.  This attack instead faults the register used by the
+entry guard before "bgeu j, len/2, exit", forcing the guard true and
+skipping the entire butterfly loop for that group.
 
-Only log2(n)-1 specific faults are needed (one per stage at the group
-containing position n-1), giving success probability ~p^(log2(n)-1)
-— far higher than requiring the entire transform to be uniformly faulted.
+Detection: optimistically assume the entry-guard fault fired for every
+group needed by both FFT calls, compute the no-butterfly pipeline output,
+and check whether verifier queries observe that predictable faulted value.
 """
 
 import argparse
@@ -16,7 +18,6 @@ import os
 import re
 import random
 import subprocess
-from math import log2
 
 P = (1 << 61) - 1
 UINT64_MAX = (1 << 64)
@@ -32,47 +33,24 @@ def _bit_reverse(a):
             out[i], out[j] = out[j], out[i]
     return out
 
-def _inv_fft_j0(a):
-    """Inverse of the j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = list(a)
-    inv2 = pow(2, P - 2, P)
-    length = n
-    while length >= 2:
-        half = length // 2
-        for i in range(0, n, length):
-            s, d = a[i], a[i + half]
-            a[i]        = (s + d) * inv2 % P
-            a[i + half] = (s + P - d) * inv2 % P
-        length //= 2
-    return _bit_reverse(a)
-
-def _fft_j0(a):
-    """Forward j=0-only FFT (all twiddle factors w=1)."""
-    n = len(a); a = _bit_reverse(list(a))
-    length = 2
-    while length <= n:
-        half = length // 2
-        for i in range(0, n, length):
-            u, v = a[i], a[i + half]
-            a[i]        = (u + v) % P
-            a[i + half] = (u + P - v) % P
-        length *= 2
-    return a
+def _fft_no_butterflies(a):
+    """DIT fft() with every inner butterfly loop skipped."""
+    return _bit_reverse(list(a))
 
 def _expected_faulted_evals(transcript_field, transcript_size):
     """
-    Compute what the evaluations SHOULD look like under the j=0 fault
-    model, using only public data (Fibonacci constraints + field params).
+    Compute the evaluations under the entry-guard fault model, using only
+    public data (Fibonacci constraints + field params).
     """
     n   = transcript_size
     inv_n = pow(n, P - 2, P)
 
-    # Broken IFFT: j=0-only FFT with inv_root, then scale by 1/n
-    coeffs = _fft_j0(list(transcript_field))
+    # Broken IFFT: bit-reversal still runs, but every butterfly is skipped.
+    coeffs = _fft_no_butterflies(list(transcript_field))
     coeffs = [(x * inv_n) % P for x in coeffs]
 
-    # Broken forward FFT on zero-padded coefficients
-    return _fft_j0(coeffs + [0] * n)
+    # Broken forward FFT on zero-padded coefficients, again with no butterflies.
+    return _fft_no_butterflies(coeffs + [0] * n)
 
 def try_extract(faulted_evals, transcript_size, expected_faulted, baseline_set, num_queries):
     """
@@ -97,7 +75,8 @@ def try_extract(faulted_evals, transcript_size, expected_faulted, baseline_set, 
 # ── Sweep infrastructure ─────────────────────────────────────────────────────
 
 EXAMPLE_DIR  = os.path.dirname(os.path.abspath(__file__))
-BACK_EDGE_PC = 0x11c02   # j-loop back-edge PC
+ENTRY_GUARD_PC = 0x11954   # bgeu a5,s7,exit: if j >= len/2, skip the group
+REG_J          = 15        # a5/x15 holds volatile j at the entry guard
 
 def fibonacci(n):
     seq = [1, 1]
@@ -131,7 +110,7 @@ def run_clean(transcript_size):
     return parse_output(r.stdout + r.stderr)
 
 def run_fi(prob, transcript_size):
-    spec = f"pc:{BACK_EDGE_PC:#x}:{prob:.1f}:s"
+    spec = f"pc:{ENTRY_GUARD_PC:#x}:{prob:.1f}:r:{REG_J}:1:FFFFFFFF"
     r    = make("run", f"FI=--fi-enable --fi-debug --fi-spec={spec}",
                 f"TRANSCRIPT_SIZE={transcript_size}")
     text = r.stdout + r.stderr
@@ -141,7 +120,7 @@ def run_fi(prob, transcript_size):
     return root, evals, triggers, crashed
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="DIT loop-skip FI sweep")
+    ap = argparse.ArgumentParser(description="DIT entry-guard FI sweep")
     ap.add_argument("-n", "--sizes", type=int, nargs="+",
                     default=[8, 16, 32, 64, 128, 256, 512, 1024],
                     help="transcript sizes to test")
