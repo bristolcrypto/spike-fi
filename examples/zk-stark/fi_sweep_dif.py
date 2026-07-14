@@ -2,13 +2,14 @@
 """
 Fault injection sweep on the Gentleman-Sande (DIF) NTT.
 
-In DIF the stages run from largest (len=n) to smallest (len=2), with
-bit-reversal at the output.  The first stage has n/2 j-iterations in a
-single group — skipping the back-edge at j=0 leaves n-2 positions
-untouched at the most mixing stage.
-
-The j=0-only DIF inverse recovers raw inputs from the faulted output.
-Each position is checked against the public Fibonacci constraints.
+The attack skips the return edge of the inner j-loop.  The final DIF
+evaluation FFT is compiled as a separate function so a PC-based return
+edge fault can fire repeatedly there without corrupting the earlier IFFT
+coefficient generation.  The final DIF mixing stage is assumed to remain
+unskipped.  Public openings are output-bit-reversed, so extraction
+correlates opened neighboring values before bit-reversal, then subtracts
+one from the other and multiplies by 2^-1 to invert that final butterfly
+and recover candidate input coefficients.
 """
 
 import argparse
@@ -16,85 +17,48 @@ import os
 import re
 import random
 import subprocess
-from math import log2
 
 P = (1 << 61) - 1
-UINT64_MAX = (1 << 64)
 
 EXAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_HOME = os.path.abspath(os.path.join(EXAMPLE_DIR, "..", ".."))
+ASM_PATH = os.path.join(REPO_HOME, "build", "zk-stark", "test.asm")
 
-# j-loop back-edge PC for DIF fft()
-BACK_EDGE_PC = 0x11bae
+def bit_reverse_index(i, bits):
+    r = 0
+    for _ in range(bits):
+        r = (r << 1) | (i & 1)
+        i >>= 1
+    return r
 
-def _bit_reverse(a):
-    n = len(a); out = list(a); j = 0
-    for i in range(1, n):
-        bit = n >> 1
-        while j & bit:
-            j ^= bit; bit >>= 1
-        j ^= bit
-        if i < j:
-            out[i], out[j] = out[j], out[i]
-    return out
+def extract_coefficients(faulted_evals, num_queries):
+    ext = len(faulted_evals)
+    if ext < 2:
+        return []
 
-def _inv_fft_j0_dif(a):
-    """
-    Inverse of the j=0-only Gentleman-Sande (DIF) FFT.
-
-    Forward DIF j=0: stages len=n..2 with butterfly (u+v, u-v),
-    then bit-reverse output.
-
-    Inverse: undo bit-reverse, then undo stages len=2..n.
-    """
-    n = len(a)
-    a = _bit_reverse(list(a))
-    inv2 = pow(2, P - 2, P)
-    length = 2
-    while length <= n:
-        half = length // 2
-        for i in range(0, n, length):
-            s, d = a[i], a[i + half]
-            a[i]        = (s + d) * inv2 % P
-            a[i + half] = (s + P - d) * inv2 % P
-        length *= 2
-    return a
-
-def _fft_j0_dif(a):
-    """Forward j=0-only DIF FFT."""
-    n = len(a); a = list(a)
-    length = n
-    while length >= 2:
-        half = length // 2
-        for i in range(0, n, length):
-            u, v = a[i], a[i + half]
-            a[i]        = (u + v) % P
-            a[i + half] = (u + P - v) % P
-        length //= 2
-    return _bit_reverse(a)
-
-def _expected_faulted_evals(transcript_field, transcript_size):
-    n     = transcript_size
-    inv_n = pow(n, P - 2, P)
-    coeffs = _fft_j0_dif(list(transcript_field))
-    coeffs = [(x * inv_n) % P for x in coeffs]
-    return _fft_j0_dif(coeffs + [0] * n)
-
-def try_extract(faulted_evals, transcript_size, expected_faulted, baseline_set, num_queries):
-    ext = 2 * transcript_size
-    nq  = min(num_queries, ext)
+    nq = min(num_queries, ext)
     queries = random.sample(range(ext), nq)
-    for q in queries:
-        if faulted_evals[q] == expected_faulted[q] and faulted_evals[q] not in baseline_set:
-            return True
-    return False
+    opened = set(queries)
+    bits = ext.bit_length() - 1
+    gap = 1
+    inv2 = pow(2, P - 2, P)
+    extracted = []
 
-# ── Sweep infrastructure ─────────────────────────────────────────────────────
+    for pre in range(0, ext - gap, 2):
+        a = bit_reverse_index(pre, bits)
+        b = bit_reverse_index(pre + gap, bits)
+        if a not in opened or b not in opened:
+            continue
+        extracted.append((faulted_evals[a] + P - faulted_evals[b]) * inv2 % P)
+        extracted.append((faulted_evals[b] + P - faulted_evals[a]) * inv2 % P)
+    return extracted
 
-def fibonacci(n):
-    seq = [1, 1]
-    for i in range(2, n):
-        seq.append((seq[-1] + seq[-2]) % UINT64_MAX)
-    return seq
+def try_extract(faulted_evals, input_coeffs, num_queries):
+    input_coeffs = set(input_coeffs)
+    extracted = extract_coefficients(faulted_evals, num_queries)
+    return any(coeff in input_coeffs for coeff in extracted)
+
+# Sweep infrastructure
 
 def make(*args):
     return subprocess.run(
@@ -110,10 +74,13 @@ def build():
 
 def parse_output(text):
     root        = re.search(r"merkle root: ([0-9a-f]+)", text)
+    coeffs_block = re.search(r"coeffs:\n(.*?)(?:\nmerkle root:|\Z)", text, re.DOTALL)
     evals_block = re.search(r"evals:\n(.*?)(?:\n\n|\Z)", text, re.DOTALL)
+    coeffs      = re.findall(r"\[\d+\] = (\d+)", coeffs_block.group(1)) if coeffs_block else []
     evals       = re.findall(r"\[\d+\] = (\d+)", evals_block.group(1)) if evals_block else []
     return (
         root.group(1) if root else None,
+        [int(v) for v in coeffs],
         [int(v) for v in evals],
     )
 
@@ -121,12 +88,32 @@ def run_clean(transcript_size):
     r = make("run", f"TRANSCRIPT_SIZE={transcript_size}")
     return parse_output(r.stdout + r.stderr)
 
-def run_fi(prob, transcript_size):
-    spec = f"pc:{BACK_EDGE_PC:#x}:{prob:.1f}:s"
-    r    = make("run", f"FI=--fi-enable --fi-debug --fi-spec={spec}",
-                f"TRANSCRIPT_SIZE={transcript_size}")
+def discover_eval_return_edge_pc():
+    with open(ASM_PATH, "r", encoding="utf-8") as f:
+        asm = f.readlines()
+
+    in_fft_eval = False
+    for line in asm:
+        if re.match(r"^[0-9a-f]+ <fft_eval>:", line):
+            in_fft_eval = True
+            continue
+        if in_fft_eval and re.match(r"^[0-9a-f]+ <[^>]+>:", line):
+            break
+        if not in_fft_eval:
+            continue
+
+        m = re.match(r"\s*([0-9a-f]+):.*\bbltu\s+a5,s11,", line)
+        if m:
+            return int(m.group(1), 16)
+
+    raise RuntimeError("could not find fft_eval inner-loop return-edge PC")
+
+def run_fi(prob, transcript_size, return_edge_pc):
+    spec = f"pc:{return_edge_pc:#x}:{prob:.1f}:s"
+    r = make("run", f"FI=--fi-enable --fi-debug --fi-spec={spec}",
+             f"TRANSCRIPT_SIZE={transcript_size}")
     text = r.stdout + r.stderr
-    root, evals = parse_output(text)
+    root, _, evals = parse_output(text)
     crashed  = root is None
     triggers = len(re.findall(r"trigger=1", text))
     return root, evals, triggers, crashed
@@ -147,19 +134,16 @@ def main():
     print("  building ... ", end="", flush=True)
     build()
     print("done", flush=True)
+    return_edge_pc = discover_eval_return_edge_pc()
 
     for transcript_size in args.sizes:
-        fib = fibonacci(transcript_size)
-        transcript_field = [f % P for f in fib]
-        expected_faulted = _expected_faulted_evals(transcript_field, transcript_size)
-
-        _, baseline_evals = run_clean(transcript_size)
-        baseline_set = set(baseline_evals)
+        _, input_coeffs, _ = run_clean(transcript_size)
 
         for num_queries in args.queries:
             print(f"\n{'='*60}", flush=True)
             print(f"TRANSCRIPT_SIZE={transcript_size}  "
                   f"NUM_QUERIES={num_queries}", flush=True)
+            print(f"FFT_EVAL_RETURN_EDGE_PC={return_edge_pc:#x}", flush=True)
             print(f"{'='*60}", flush=True)
 
             print(f"  {'prob':>6}  {'runs':>5}  {'extracted':>10}  "
@@ -172,14 +156,15 @@ def main():
                 total_triggers = 0
 
                 for _ in range(args.runs):
-                    root, evals, triggers, crashed = run_fi(prob, transcript_size)
+                    root, evals, triggers, crashed = run_fi(
+                        prob, transcript_size, return_edge_pc
+                    )
                     total_triggers += triggers
 
                     if crashed:
                         crashes += 1
                     else:
-                        if try_extract(evals, transcript_size, expected_faulted,
-                                       baseline_set, num_queries):
+                        if try_extract(evals, input_coeffs, num_queries):
                             extracted += 1
 
                 avg_triggers = total_triggers / args.runs

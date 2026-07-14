@@ -73,6 +73,26 @@ void fft(uint64_t* a, size_t n, uint64_t root, uint64_t mod) {
 	bit_reverse(a, n);
 }
 
+__attribute__((noinline))
+void fft_eval(uint64_t* a, size_t n, uint64_t root, uint64_t mod) {
+	for (size_t len = n; len >= 2; len /= 2) {
+		size_t half = len / 2;
+		uint64_t wlen = modpow(root, n / len, mod);
+		for (size_t i = 0; i < n; i += len) {
+			uint64_t w = 1;
+			FI_MARK( 1 );
+			for (volatile size_t j = 0; j < half; j++) {
+				uint64_t u = a[i + j] % mod;
+				uint64_t v = a[i + j + half] % mod;
+				a[i + j]        = (u + v) % mod;
+				a[i + j + half] = modmul((u + mod - v) % mod, w, mod);
+				w = modmul(w, wlen, mod);
+			}
+		}
+	}
+	bit_reverse(a, n);
+}
+
 void ifft(uint64_t* a, size_t n, uint64_t root, uint64_t mod) {
 	uint64_t inv_root = modinv(root, mod);
 	uint64_t inv_n    = modinv(n, mod);
@@ -130,7 +150,7 @@ int main( int argc, char* argv[] ) {
 		evals[i] = coeffs[i];
 	for (size_t i = n; i < extended_len; i++)
 		evals[i] = 0;
-	fft(evals, extended_len, extended_root, FIELD_MODULUS);
+	fft_eval(evals, extended_len, extended_root, FIELD_MODULUS);
 
 	for (size_t i = 0; i < extended_len; i++) {
 		uint8_t bytes[32] = {0};
